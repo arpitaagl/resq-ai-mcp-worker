@@ -1,51 +1,96 @@
-# Building a Remote MCP Server on Cloudflare (Without Auth)
+# ResQ-AI MCP Worker
 
-This example allows you to deploy a stateless remote MCP server that doesn't require authentication on Cloudflare Workers. It implements the MCP 2026-07-28 specification while remaining compatible with legacy clients for ordinary tool calls.
+This Cloudflare Worker exposes seven read-only ResQ-AI MCP tools and protects
+them with the Cloudflare Workers OAuth Provider. Users sign in through Auth0;
+MCP clients receive Worker-issued access tokens for the `/mcp` resource. The
+Worker keeps only the verified Auth0 subject in its grant and does not request
+or retain Auth0 refresh tokens.
 
-## Get started:
+## Configure Auth0
 
-[![Deploy to Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/ai/tree/main/demos/remote-mcp-authless)
+Create an Auth0 Regular Web Application and configure its Allowed Callback URL
+as `https://<your-worker-host>/callback`. Set these Worker variables:
 
-This will deploy your MCP server to a URL like: `remote-mcp-server-authless.<your-account>.workers.dev/mcp`
+- `AUTH0_DOMAIN`: your Auth0 tenant hostname, such as `example.us.auth0.com`
+- `AUTH0_CLIENT_ID`: the application's client ID
+- `MCP_PUBLIC_URL`: the canonical Worker origin, such as
+  `https://resq-ai.example.com` (no path or trailing slash)
+- `AUTH0_CLIENT_SECRET`: the application's client secret, stored as a Worker
+  secret (for example, with `wrangler secret put AUTH0_CLIENT_SECRET`)
 
-Alternatively, you can use the command line below to get the remote MCP Server created on your local machine:
+The `/authorize` endpoint shows a browser-bound consent page before redirecting
+to Auth0. The callback validates the OAuth state, upstream PKCE verifier, Auth0
+ID-token signature, issuer, audience, and nonce before issuing a Worker token.
+The Cloudflare `OAUTH_KV` binding stores OAuth protocol data. Configure the
+existing KV namespace in `wrangler.jsonc` for each deployment environment.
 
-```bash
-npm create cloudflare@latest -- my-mcp-server --template=cloudflare/ai/demos/remote-mcp-authless
+The configured `MCP_PUBLIC_URL` pins the OAuth issuer, callback, and protected
+resource metadata to one hostname. Requests on other hostnames are rejected.
+The protected resource identifier is `<MCP_PUBLIC_URL>/mcp`. For local
+development, use the Wrangler local origin (for example,
+`http://localhost:8787`) and add that callback to the Auth0 application's
+Allowed Callback URLs. MCP calls require a valid Worker access token with the
+`mcp:read` scope.
+
+OAuth metadata advertises Dynamic Client Registration at `/oauth/register` and
+Client ID Metadata Documents. The Wrangler `global_fetch_strictly_public` flag
+is enabled for safe public client-metadata fetches.
+
+## Development
+
+Use Node.js 24 and npm 9 or newer. The lockfile is version 3; older npm 6 may
+misread it. Install the locked dependencies with `npm ci`.
+
+For local OAuth testing, keep the Auth0 values in the ignored `.dev.vars` file.
+Set `MCP_PUBLIC_URL` to the exact local origin `http://localhost:8787`, set the
+three Auth0 values described above, and add
+`http://localhost:8787/callback` to the Auth0 application's Allowed Callback
+URLs. Do not put credentials in tracked files.
+
+Start one local-only Worker over HTTP on loopback with:
+
+```sh
+npm run dev -- --local --ip 127.0.0.1 --port 8787 --local-protocol http
 ```
 
-## Customizing your MCP Server
+Configure an MCP client with the resource endpoint
+`http://localhost:8787/mcp` and let it discover OAuth metadata and register
+itself. The Worker advertises Dynamic Client Registration at
+`/oauth/register` and supports Client ID Metadata Documents; do not invent a
+client ID or manually open `/authorize` without a complete client authorization
+request. The client supplies its registered callback URI, state, and S256 PKCE
+challenge. Stop the local Worker with Ctrl+C in the same terminal.
 
-To add your own [tools](https://developers.cloudflare.com/agents/model-context-protocol/protocol/tools/) to the MCP server, register each tool on the `McpServer` created in the `createServer()` function in `src/index.ts` using `server.registerTool(...)`.
+If `/authorize` returns `Worker public URL is not configured`, inspect the
+Wrangler terminal for the sanitized `MCP_PUBLIC_URL configuration diagnostic`.
+It reports only whether the setting is nonempty and one fixed category:
+`missing`, `malformed`, `canonical_origin_rejected`, or `unexpected`. Confirm
+that Wrangler loaded `.dev.vars` from this project and that its origin exactly
+matches the hostname used by the MCP client. The diagnostic never logs the URL
+or OAuth credentials. A `421 Misdirected request` means the request hostname
+does not match the configured public origin.
 
-## Connect to Cloudflare AI Playground
+Run local automated checks with:
 
-You can connect to your MCP server from the Cloudflare AI Playground, which is a remote MCP client:
-
-1. Go to https://playground.ai.cloudflare.com/
-2. Enter your deployed MCP server URL (`remote-mcp-server-authless.<your-account>.workers.dev/mcp`)
-3. You can now use your MCP tools directly from the playground!
-
-## Connect Claude Desktop to your MCP server
-
-You can also connect to your remote MCP server from local MCP clients, by using the [mcp-remote proxy](https://www.npmjs.com/package/mcp-remote).
-
-To connect to your MCP server from Claude Desktop, follow [Anthropic's Quickstart](https://modelcontextprotocol.io/quickstart/user) and within Claude Desktop go to Settings > Developer > Edit Config.
-
-Update with this configuration:
-
-```json
-{
-	"mcpServers": {
-		"calculator": {
-			"command": "npx",
-			"args": [
-				"mcp-remote",
-				"http://localhost:8787/mcp" // or remote-mcp-server-authless.your-account.workers.dev/mcp
-			]
-		}
-	}
-}
+```sh
+npm run type-check
+npm test
 ```
 
-Restart Claude and you should see the tools become available.
+The tests use Node.js 24's built-in test runner and the installed Workers OAuth
+Provider package. They exercise registration, consent, state, PKCE, and token
+handling with a mock Auth0 issuer. They do not contact a real Auth0 tenant or
+verify deployment-specific callback configuration; only a real client login
+can verify the complete configured OAuth flow.
+
+## Demo data and priority score
+
+The tools use illustrative sample data; live incident, resource, shelter, and
+government-alert feeds are not connected. The deterministic demonstration
+priority score remains:
+
+```text
+severity * 20 + min(peopleAffected, 200) / 10
+```
+
+It is not validated for real-world triage or dispatch.

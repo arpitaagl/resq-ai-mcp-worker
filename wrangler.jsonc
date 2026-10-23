@@ -11,13 +11,17 @@
 	"name": "resq-ai-mcp-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-02",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
 	"observability": {
-		"enabled": true
+		"enabled": true,
 	},
-	"upload_source_maps": true
+	"upload_source_maps": true,
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "5681470e60d54e20b7ebff864e1a75d2",
+		},
+	],
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
